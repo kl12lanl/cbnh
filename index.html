@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Мини-Stockfish Шахматы</title>
+    <!-- Базовые стили для доски, чтобы она работала автономно -->
+    <style>
+        body {
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            background: #202225;
+            color: #fff;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            user-select: none;
+        }
+        h1 { margin-bottom: 5px; color: #4caf50; font-size: 2rem; }
+        .status-container { font-size: 1.2rem; min-height: 35px; text-align: center; font-weight: 500; }
+        
+        /* Автономная адаптивная доска */
+        #board-wrapper { width: 400px; max-width: 90vw; margin: 20px 0; }
+        .chess-board {
+            display: grid;
+            grid-template-columns: repeat(8, 1fr);
+            grid-template-rows: repeat(8, 1fr);
+            aspect-ratio: 1;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+            border: 2px solid #333;
+        }
+        .square {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            cursor: pointer;
+        }
+        .white-sq { background-color: #f0d9b5; }
+        .black-sq { background-color: #b58863; }
+        .square.selected { background-color: #7ab873 !important; }
+        .square.highlight { background-color: #aad754 !important; }
+        
+        /* Фигуры в формате SVG (зашиты прямо в код) */
+        .piece {
+            width: 90%;
+            height: 90%;
+            background-size: contain;
+            background-repeat: no-repeat;
+            background-position: center;
+            z-index: 2;
+            pointer-events: none;
+        }
+
+        button {
+            padding: 12px 24px;
+            font-size: 1rem;
+            background-color: #4caf50;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: bold;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.2);
+            transition: all 0.2s;
+        }
+        button:hover { background-color: #45a049; transform: translateY(-1px); }
+        button:active { transform: translateY(1px); }
+    </style>
+</head>
+<body>
+
+    <h1>Шахматный ИИ</h1>
+    <div class="status-container" id="status">Ваш ход (Белые)</div>
+    
+    <div id="board-wrapper">
+        <div id="chess-board" class="chess-board"></div>
+    </div>
+    
+    <button id="resetBtn">Начать заново</button>
+
+    <script>
+        // --- 1. АВТОНОМНЫЙ ДВИЖОК ЛОГИКИ ПРАВИЛ (Упрощенный аналог Chess.js) ---
+        // Начальное представление доски (заглавные - белые, строчные - черные)
+        const INITIAL_BOARD = [
+            ['r','n','b','q','k','b','n','r'],
+            ['p','p','p','p','p','p','p','p'],
+            ['.','.','.','.','.','.','.','.'],
+            ['.','.','.','.','.','.','.','.'],
+            ['.','.','.','.','.','.','.','.'],
+            ['.','.','.','.','.','.','.','.'],
+            ['P','P','P','P','P','P','P','P'],
+            ['R','N','B','Q','K','B','N','R']
+        ];
+
+        let boardState = JSON.parse(JSON.stringify(INITIAL_BOARD));
+        let turn = 'w'; // 'w' или 'b'
+        let selectedSquare = null;
+
+        // Ссылки на встроенную графику фигур Википедии (SVG)
+        const PIECE_IMAGES = {
+            'P': 'https://wikimedia.org',
+            'N': 'https://wikimedia.org',
+            'B': 'https://wikimedia.org',
+            'R': 'https://wikimedia.org',
+            'Q': 'https://wikimedia.org',
+            'K': 'https://wikimedia.org',
+            'p': 'https://wikimedia.org',
+            'n': 'https://wikimedia.org',
+            'b': 'https://wikimedia.org',
+            'r': 'https://wikimedia.org',
+            'q': 'https://wikimedia.org',
+            'k': 'https://wikimedia.org'
+        };
+
+        // Стоимость фигур для ИИ оценки
+        const PIECE_VALUES = { 'P': 100, 'N': 320, 'B': 330, 'R': 500, 'Q': 900, 'K': 20000,
+                               'p': -100, 'n': -320, 'b': -330, 'r': -500, 'q': -900, 'k': -20000 };
+
+        // --- 2. РЕНДЕРИНГ И ИНТЕРФЕЙС ---
+        const boardEl = document.getElementById('chess-board');
+        const statusEl = document.getElementById('status');
+
+        function createBoardDOM() {
+            boardEl.innerHTML = '';
+            for (let r = 0; r < 8; r++) {
+                for (let c = 0; c < 8; c++) {
+                    const sq = document.createElement('div');
+                    sq.className = `square ${(r + c) % 2 === 0 ? 'white-sq' : 'black-sq'}`;
+                    sq.dataset.row = r;
+                    sq.dataset.col = c;
+                    
+                    const piece = boardState[r][c];
+                    if (piece !== '.') {
+                        const pieceEl = document.createElement('div');
+                        pieceEl.className = 'piece';
+                        pieceEl.style.backgroundImage = `url('${PIECE_IMAGES[piece]}')`;
+                        sq.appendChild(pieceEl);
+                    }
+                    
+                    sq.addEventListener('click', handleSquareClick);
+                    boardEl.appendChild(sq);
+                }
+            }
+        }
+
+        function handleSquareClick(e) {
+            if (turn === 'b') return; // Ход ИИ, кликать нельзя
+
+            const r = parseInt(this.dataset.row);
+            const c = parseInt(parseInt(this.dataset.col));
+            const piece = boardState[r][c];
+
+            if (selectedSquare) {
+                // Пытаемся сделать ход
+                const fromR = selectedSquare.r;
+                const fromC = selectedSquare.c;
+                
+                if (isValidMove(fromR, fromC, r, c, boardState)) {
+                    makeMove(fromR, fromC, r, c);
+                    selectedSquare = null;
+                    clearHighlights();
+                    
+                    if (!isGameOver()) {
+                        statusEl.innerHTML = 'ИИ думает...';
+                        setTimeout(makeAIMove, 300);
+                    }
+                    return;
+                }
+            }
+
+            // Выбор своей фигуры
+            if (piece !== '.' && piece === piece.toUpperCase()) {
+                clearHighlights();
+                selectedSquare = { r, c };
+                this.classList.add('selected');
+                showLegalMoves(r, c);
+            } else {
+                selectedSquare = null;
+                clearHighlights();
+            }
+        }
+
+        function clearHighlights() {
+            document.querySelectorAll('.square').forEach(sq => {
+                sq.classList.remove('selected', 'highlight');
+            });
+        }
+
+        function showLegalMoves(fromR, fromC) {
+            document.querySelectorAll('.square').forEach(sq => {
+                const r = parseInt(sq.dataset.row);
+                const c = parseInt(sq.dataset.col);
+                if (isValidMove(fromR, fromC, r, c, boardState)) {
+                    sq.classList.add('highlight');
+                }
+            });
+        }
+
+        // --- 3. БАЗОВЫЕ ШАХМАТНЫЕ ПРАВИЛА (Генератор ходов) ---
+        function isValidMove(fromR, fromC, toR, toC, currentBoard) {
+            if (fromR === toR && fromC === toC) return false;
+            const piece = currentBoard[fromR][fromC];
+            const target = currentBoard[toR][toC];
+
+            // Нельзя бить свои фигуры
+            if (target !== '.' && ((piece === piece.toUpperCase() && target === target.toUpperCase()) || 
+                                   (piece === piece.toLowerCase() && target === target.toLowerCase()))) {
+                return false;
+            }
+
+            const dr = toR - fromR;
+            const dc = toC - fromC;
+            const absDr = Math.abs(dr);
+            const absDc = Math.abs(dc);
+
+            // Логика пешек
+            if (piece.toUpperCase() === 'P') {
+                const dir = piece === 'P' ? -1 : 1; // Белые идут вверх (-1), черные вниз (+1)
+                const startRow = piece === 'P' ? 6 : 1;
+
+                if (dc === 0 && target === '.') {
+                    if (dr === dir) return true;
+                    if (fromR === startRow && dr === 2 * dir && currentBoard[fromR + dir][fromC] === '.') return true;
+                }
+                if (absDc === 1 && dr === dir && target !== '.') return true; // взятие
+                return false;
+            }
+
+            // Логика коня
+            if (piece.toUpperCase() === 'N') {
+                return (absDr === 2 && absDc === 1) || (absDr === 1 && absDc === 2);
+            }
+
+            // Логика короля
+            if (piece.toUpperCase() === 'K') {
+                return absDr <= 1 && absDc <= 1;
+            }
+
+            // Линейные фигуры (Ладья, Слон, Ферзь) с проверкой препятствий
+            let checkLinear = false;
+            if (piece.toUpperCase() === 'R' && (dr === 0 || dc === 0)) checkLinear = true;
+            if (piece.toUpperCase() === 'B' && absDr === absDc) checkLinear = true;
+            if (piece.toUpperCase() === 'Q' && (dr === 0 || dc === 0 || absDr === absDc)) checkLinear = true;
+
+            if (checkLinear) {
+                const stepR = dr === 0 ? 0 : dr / absDr;
